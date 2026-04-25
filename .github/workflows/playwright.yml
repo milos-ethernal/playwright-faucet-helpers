@@ -1,0 +1,50 @@
+name: Playwright Tests
+on:
+  schedule:
+    - cron: "0 0 * * *"
+jobs:
+  prepare-wallets:
+    runs-on: ubuntu-latest
+    outputs:
+      addresses: ${{ steps.wallets.outputs.addresses }}
+    steps:
+    - name: Define wallet addresses
+      id: wallets
+      run: |
+        ADDRESSES='[
+          "0x721a6a568e78588e8226e8AeEeBa77f8ce7Db62e",
+          "0x3e4e4f63aFF7715e9909704F45775f6b7AF3C3d2",
+          "0xa7D082d8C5952d2BCE4E8984f5B467429346d6F5",
+          "0xc71a49cEbCF86f3283D0BC3193f62b9A3fAa216E",
+          "0x05Dd8e8554C34c9170f285c81C93b9a130609B0A"
+        ]'
+        echo "addresses=$(echo "$ADDRESSES" | tr -d '\n ')" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: prepare-wallets
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        walletAddress: ${{ fromJson(needs.prepare-wallets.outputs.addresses) }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    - name: Install dependencies
+      run: npm ci
+    - name: Install Playwright Browsers
+      run: npx playwright install --with-deps
+    - name: Run Playwright tests
+      env:
+        WALLET_ADDRESS: ${{ matrix.walletAddress }}
+        SBR_CDP: ${{ secrets.SBR_CDP }}
+      run: npx playwright test tests/sepolia.spec.ts
+    - uses: actions/upload-artifact@v4
+      if: ${{ !cancelled() }}
+      with:
+        name: playwright-report-${{ matrix.walletAddress }}
+        path: playwright-report/
+        retention-days: 30
