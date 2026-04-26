@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         walletAddress: ${{ fromJson(needs.prepare-wallets.outputs.addresses) }}
     steps:

@@ -20,10 +20,19 @@ export function recordScreenshots(
 
   const done = (async () => {
     while (!stopped && Date.now() - start < durationMs) {
-      await page.screenshot({
-        path: `${screenshotsDir}/frame-${i}.png`,
-        fullPage: true
-      });
+      if (page.isClosed()) {
+        return;
+      }
+      try {
+        await page.screenshot({
+          path: `${screenshotsDir}/frame-${i}.png`,
+          fullPage: true,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`Screenshot ${i} failed: ${message}`);
+        return;
+      }
 
       await new Promise((r) => setTimeout(r, intervalMs));
       i++;
@@ -129,7 +138,7 @@ async function waitAndClickClaimRewards(page: Page, timeoutMs = 300000) {
     if (isVisible) {
       console.log('Claim Rewards button is visible, clicking...');
       await button.click();
-      break;
+      return;
     }
 
     await page.waitForTimeout(5000);
@@ -207,8 +216,14 @@ test('test', async ({}, testInfo) => {
     await waitAndClickClaimRewards(page);
   } finally {
     recorder.stop();
-    await recorder.done;
-    await browser.close();
+    await recorder.done.catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Recorder failed during shutdown: ${message}`);
+    });
+    await browser.close().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`browser.close() failed: ${message}`);
+    });
     console.log('Browser closed');
 
     if (testInfo.status === testInfo.expectedStatus) {
