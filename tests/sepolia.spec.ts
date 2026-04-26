@@ -6,6 +6,7 @@ const walletAddress =
 
 const USE_BRIGHTDATA = true;
 const SBR_CDP = process.env.SBR_CDP ?? '';
+const IS_CI = !!process.env.CI;
 
 export function recordScreenshots(
   page: Page,
@@ -98,17 +99,29 @@ async function checkCaptchaSolved(page: Page): Promise<boolean> {
   });
 }
 
-async function clickUntilDisabled(page: Page, delayMs = 100) {
+async function clickUntilDisabled(page: Page, delayMs = 100, timeoutMs = 120000) {
   const button = page.getByRole('button', { name: '+' });
+  const deadline = Date.now() + timeoutMs;
 
   while (!(await button.isDisabled())) {
+    if (page.isClosed()) {
+      throw new Error('Page was closed while clicking "+" button.');
+    }
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting for "+" button to become disabled.');
+    }
     await button.click();
     await page.waitForTimeout(delayMs);
   }
 }
 
-async function waitAndClickClaimRewards(page: Page) {
-  while (true) {
+async function waitAndClickClaimRewards(page: Page, timeoutMs = 300000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (page.isClosed()) {
+      throw new Error('Page was closed while waiting for Claim Rewards.');
+    }
     console.log('Waiting for Claim Rewards button to be visible...');
     const button = page.getByRole('button', { name: 'Claim Rewards', exact: true });
     const isVisible = await button.isVisible().catch(() => false);
@@ -121,6 +134,8 @@ async function waitAndClickClaimRewards(page: Page) {
 
     await page.waitForTimeout(5000);
   }
+
+  throw new Error('Timed out waiting for Claim Rewards button to be visible.');
 }
 
 const MAX_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -135,12 +150,29 @@ test('test', async ({}, testInfo) => {
 
   const browser = USE_BRIGHTDATA
     ? await chromium.connectOverCDP(SBR_CDP)
-    : await chromium.launch({ headless: false });
+    : await chromium.launch({
+        headless: IS_CI,
+        args: IS_CI ? ['--disable-dev-shm-usage'] : undefined,
+      });
 
-  console.log('Connected to BrightData');
+  console.log(USE_BRIGHTDATA ? 'Connected to BrightData' : 'Launched local Chromium');
 
-  const context = browser.contexts()[0] || await browser.newContext();
-  const page = context.pages()[0] || await context.newPage();
+  // Use a dedicated isolated context/page for this test run.
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  browser.on('disconnected', () => {
+    console.error('Browser disconnected unexpectedly.');
+  });
+  context.on('close', () => {
+    console.error('Browser context closed.');
+  });
+  page.on('close', () => {
+    console.error('Page closed.');
+  });
+  page.on('crash', () => {
+    console.error('Page crashed.');
+  });
   const screenshotsDir = testInfo.outputPath('screenshots');
   await mkdir(screenshotsDir, { recursive: true });
 
@@ -160,7 +192,8 @@ test('test', async ({}, testInfo) => {
       console.log("Proceeding past CAPTCHA...");
       // continue with your automation here
     } catch (err) {
-      console.error(err.message);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`CAPTCHA step failed: ${message}`);
     }
 
     await page.waitForTimeout(1000);
