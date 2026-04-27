@@ -124,7 +124,7 @@ async function clickUntilDisabled(page: Page, delayMs = 100, timeoutMs = 120000)
   }
 }
 
-async function waitAndClickClaimRewards(page: Page, timeoutMs = 300000) {
+async function waitAndClickClaimRewards(page: Page, timeoutMs = MAX_DURATION_MS) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
