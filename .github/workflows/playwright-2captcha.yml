@@ -15,8 +15,8 @@ jobs:
         id: wallets
         run: |
           ADDRESSES='[
-            "0x2D905ed3a4B659869583FEFe4473566aF31B2D8c",
-            "0x90Ce606090cfEAD56fc6263F13c350c808A91903"
+            "0x04E577B8B9AAFc30f50F60500e6c715a9893bbB7",
+            "0xB37B420eE82A28Ea6D071c515935110f091BDBa8"
           ]'
           echo "addresses=$(echo "$ADDRESSES" | tr -d '\n ')" >> "$GITHUB_OUTPUT"
 
