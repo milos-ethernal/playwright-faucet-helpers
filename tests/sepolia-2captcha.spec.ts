@@ -256,7 +256,7 @@ test('test', async ({}, testInfo) => {
   console.log(`Clean IP: ${ipInfo.query} — ${ipInfo.org}`);
 
   // Start keepalive immediately after page creation
-  const keepAlive = startKeepAlive(page, 20000); // ping every 20s
+  // const keepAlive = startKeepAlive(page, 20000); // ping every 20s
 
   browser.on('disconnected', () => {
     console.error('Browser disconnected unexpectedly.');
@@ -303,8 +303,8 @@ test('test', async ({}, testInfo) => {
 
     await waitAndClickClaimRewards(page);
   } finally {
-    keepAlive.stop();
-    await keepAlive.done.catch(() => {});
+    // keepAlive.stop();
+    // await keepAlive.done.catch(() => {});
 
     recorder.stop();
     await recorder.done.catch((err) => {
