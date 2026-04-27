@@ -234,15 +234,19 @@ test('test', async ({}, testInfo) => {
   const browser = await chromium.launch({
     headless: IS_CI,
     args: IS_CI ? ['--disable-dev-shm-usage'] : undefined,
-    proxy: {
-      server: 'http://brd.superproxy.io:33335',
-      username: process.env.BRIGHTDATA_USERNAME!,
-      password: process.env.BRIGHTDATA_PASSWORD!,
-    },
   });
 
   // Use a dedicated isolated context/page for this test run.
-  const context = await browser.newContext();
+  const context = await browser.newContext(
+    {
+      ignoreHTTPSErrors: true,
+      proxy: {
+        server: 'http://brd.superproxy.io:33335',
+        username: process.env.BRIGHTDATA_USERNAME!,
+        password: process.env.BRIGHTDATA_PASSWORD!,
+      }
+    },
+  );
   const page = await context.newPage();
 
   // Check if the proxy is working and not being blocked
