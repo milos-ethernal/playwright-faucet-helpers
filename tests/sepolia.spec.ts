@@ -147,6 +147,41 @@ async function waitAndClickClaimRewards(page: Page, timeoutMs = MAX_DURATION_MS)
   throw new Error('Timed out waiting for Claim Rewards button to be visible.');
 }
 
+function startKeepAlive(page: Page, intervalMs = 20000) {
+  let stopped = false;
+  let intervals = 0;
+
+  const loop = (async () => {
+    while (!stopped) {
+      if (page.isClosed()) return;
+      try {
+        // Cheap no-op: just evaluates a tiny expression
+        await page.evaluate(() => Date.now());
+
+        if (intervals > 15) {
+          await page.mouse.move(
+            100 + Math.random() * 10,
+            100 + Math.random() * 10
+          );
+        }
+        
+        intervals++;
+        if (intervals % 10 === 0) {
+          console.log(`Pinged page ${intervals} times`);
+        }
+      } catch {
+        // ignore — page may be mid-navigation
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  })();
+
+  return {
+    stop() { stopped = true; },
+    done: loop,
+  };
+}
+
 const MAX_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 test('test', async ({}, testInfo) => {
@@ -169,6 +204,9 @@ test('test', async ({}, testInfo) => {
   // Use a dedicated isolated context/page for this test run.
   const context = await browser.newContext();
   const page = await context.newPage();
+
+  // Start keepalive immediately after page creation
+  const keepAlive = startKeepAlive(page, 20000); // ping every 20s
 
   browser.on('disconnected', () => {
     console.error('Browser disconnected unexpectedly.');
@@ -215,6 +253,9 @@ test('test', async ({}, testInfo) => {
 
     await waitAndClickClaimRewards(page);
   } finally {
+    keepAlive.stop();
+    await keepAlive.done.catch(() => {});
+
     recorder.stop();
     await recorder.done.catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
