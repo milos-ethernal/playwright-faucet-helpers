@@ -232,13 +232,18 @@ test('test', async ({}, testInfo) => {
 
   // Connect instead of launching locally
   const browser = await chromium.launch({
-    headless: IS_CI,
-    args: IS_CI ? ['--disable-dev-shm-usage'] : undefined,
+    headless: false,
+    args: [
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+    ],
   });
 
   // Use a dedicated isolated context/page for this test run.
   const context = await browser.newContext(
     {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true,
       proxy: {
         server: 'http://brd.superproxy.io:33335',
@@ -280,11 +285,16 @@ test('test', async ({}, testInfo) => {
   // start recording (don't await yet if you want parallel)
   const recorder = recordScreenshots(page, screenshotsDir, MAX_DURATION_MS, 5000);
 
+  // Abort and re-route captcha domains around the proxy
+  await page.route('**/*hcaptcha.com/**', route => route.continue());
+  await page.route('**/*recaptcha.net/**', route => route.continue());
+  await page.route('**/*gstatic.com/**', route => route.continue());
+
   try {
     await page.goto('https://sepolia-faucet.pk910.de/#/');
     await page.getByRole('textbox', { name: 'Please enter ETH address or' }).click();
     await page.getByRole('textbox', { name: 'Please enter ETH address or' }).fill(walletAddress);
-    
+
     const pollIntervalMs = 2000;
     await page.waitForTimeout(pollIntervalMs);
 
