@@ -234,11 +234,26 @@ test('test', async ({}, testInfo) => {
   const browser = await chromium.launch({
     headless: IS_CI,
     args: IS_CI ? ['--disable-dev-shm-usage'] : undefined,
+    proxy: {
+      server: 'http://brd.superproxy.io:33335',
+      username: process.env.BRIGHTDATA_USERNAME!,
+      password: process.env.BRIGHTDATA_PASSWORD!,
+    },
   });
 
   // Use a dedicated isolated context/page for this test run.
   const context = await browser.newContext();
   const page = await context.newPage();
+
+  // Check if the proxy is working and not being blocked
+  const response = await page.goto('http://ip-api.com/json/?fields=21155839');
+  const ipInfo = await response?.json();
+
+  if (ipInfo.hosting || ipInfo.proxy) {
+    throw new Error(`Proxy IP ${ipInfo.query} is flagged (hosting=${ipInfo.hosting}, proxy=${ipInfo.proxy})`);
+  }
+
+  console.log(`Clean IP: ${ipInfo.query} — ${ipInfo.org}`);
 
   // Start keepalive immediately after page creation
   const keepAlive = startKeepAlive(page, 20000); // ping every 20s
