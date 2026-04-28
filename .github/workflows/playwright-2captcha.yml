@@ -44,7 +44,7 @@ jobs:
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
           BRIGHTDATA_USERNAME: ${{ secrets.BRIGHTDATA_USERNAME }}
           BRIGHTDATA_PASSWORD: ${{ secrets.BRIGHTDATA_PASSWORD }}
-        run: npx playwright test tests/sepolia-2captcha.spec.ts
+        run: xvfb-run --auto-servernum -- npx playwright test tests/sepolia-2captcha.spec.ts
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
