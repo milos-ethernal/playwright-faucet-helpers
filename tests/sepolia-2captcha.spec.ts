@@ -51,7 +51,42 @@ import { Solver } from '@2captcha/captcha-solver';
 
 const solver = new Solver(process.env.TWOCAPTCHA_API_KEY!);
 
+async function waitForCaptchaToAppear(page: Page, timeoutMs = 45000): Promise<string> {
+  const captchaIframeSelector =
+    'iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="reCAPTCHA"], iframe[title*="hCaptcha"]';
+
+  await page.waitForFunction(
+    ({ selector }) => {
+      const frame = document.querySelector<HTMLIFrameElement>(selector);
+      if (!frame) return false;
+      const src = frame.src || '';
+      const title = frame.title || '';
+      return (
+        src.includes('recaptcha') ||
+        src.includes('hcaptcha') ||
+        title.toLowerCase().includes('captcha')
+      );
+    },
+    { selector: captchaIframeSelector },
+    { timeout: timeoutMs },
+  );
+
+  const frameSrc = await page.evaluate((selector) => {
+    const frame = document.querySelector<HTMLIFrameElement>(selector);
+    return frame?.src ?? '';
+  }, captchaIframeSelector);
+
+  if (!frameSrc) {
+    throw new Error('CAPTCHA iframe appeared but did not contain a src.');
+  }
+
+  return frameSrc;
+}
+
 async function solveCaptchaViaAPI(page: Page): Promise<void> {
+  const captchaFrameSrc = await waitForCaptchaToAppear(page);
+  console.log(`CAPTCHA iframe detected: ${captchaFrameSrc}`);
+
   // Extract sitekey from the reCAPTCHA iframe URL
   const sitekey = await page.waitForFunction(() => {
     const frames = Array.from(document.querySelectorAll('iframe'));
@@ -294,6 +329,7 @@ test('test', async ({}, testInfo) => {
     await page.goto('https://sepolia-faucet.pk910.de/#/');
     await page.getByRole('textbox', { name: 'Please enter ETH address or' }).click();
     await page.getByRole('textbox', { name: 'Please enter ETH address or' }).fill(walletAddress);
+    await page.waitForLoadState('networkidle');
 
     const pollIntervalMs = 2000;
     await page.waitForTimeout(pollIntervalMs);
@@ -303,6 +339,16 @@ test('test', async ({}, testInfo) => {
       console.log("Proceeding past CAPTCHA...");
       // continue with your automation here
     } catch (err) {
+      await page.screenshot({
+        path: `${screenshotsDir}/captcha-not-visible.png`,
+        fullPage: true,
+      }).catch(() => {});
+      const frameDebug = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('iframe'))
+          .map((frame) => ({ src: frame.getAttribute('src') ?? '', title: frame.getAttribute('title') ?? '' }))
+          .slice(0, 20);
+      }).catch(() => []);
+      console.error('Detected iframes before CAPTCHA failure:', frameDebug);
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`CAPTCHA step failed: ${message}`);
     }
