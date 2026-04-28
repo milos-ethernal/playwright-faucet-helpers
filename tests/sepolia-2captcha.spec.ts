@@ -255,6 +255,138 @@ function startKeepAlive(page: Page, intervalMs = 20000) {
   };
 }
 
+type CaptchaType = 'recaptcha' | 'hcaptcha' | 'none';
+
+async function detectCaptchaType(page: Page, timeoutMs = 10000): Promise<CaptchaType> {
+  try {
+    const result = await page.waitForFunction(() => {
+      // hCaptcha renders an iframe with hcaptcha.com in the src
+      const hasHCaptcha = !!document.querySelector('iframe[src*="hcaptcha.com"]');
+      if (hasHCaptcha) return 'hcaptcha';
+
+      // reCaptcha v3 sets ___grecaptcha_cfg or injects a hidden textarea
+      const hasRecaptcha =
+        !!(window as any).___grecaptcha_cfg ||
+        !!document.querySelector('#g-recaptcha-response') ||
+        !!document.querySelector('textarea[name="g-recaptcha-response"]');
+      if (hasRecaptcha) return 'recaptcha';
+
+      return null; // not ready yet
+    }, { timeout: timeoutMs });
+
+    return (await result.jsonValue()) as CaptchaType;
+  } catch {
+    return 'none'; // timed out - no captcha present
+  }
+}
+
+async function solveCaptcha(page: Page): Promise<void> {
+  const type = await detectCaptchaType(page);
+  console.log(`Captcha detected: ${type}`);
+
+  if (type === 'none') {
+    console.log('No captcha present, proceeding...');
+    return;
+  }
+
+  if (type === 'recaptcha') {
+    await solveRecaptchaV3(page);
+  } else {
+    await solveHCaptcha(page);
+  }
+}
+
+async function solveRecaptchaV3(page: Page): Promise<void> {
+  const result = await solver.recaptcha({
+    pageurl: 'https://sepolia-faucet.pk910.de/',
+    googlekey: SEPOLIA_FAUCET_SITEKEY,
+    version: 'v3',
+    action: 'verify',
+    min_score: 0.3,
+  });
+
+  await page.evaluate((token) => {
+    const textarea = document.querySelector<HTMLTextAreaElement>('#g-recaptcha-response');
+    if (textarea) {
+      textarea.style.display = 'block';
+      textarea.value = token;
+    }
+    const clients = (window as any).___grecaptcha_cfg?.clients;
+    if (clients) {
+      for (const key of Object.keys(clients)) {
+        const client = clients[key];
+        for (const prop of Object.keys(client)) {
+          if (client[prop]?.callback) {
+            client[prop].callback(token);
+            return;
+          }
+        }
+      }
+    }
+  }, result.data);
+
+  console.log('reCaptcha v3 token injected');
+}
+
+async function solveHCaptcha(page: Page): Promise<void> {
+  // Extract sitekey from the rendered iframe URL
+  const sitekey = await page.evaluate(() => {
+    const iframe = document.querySelector<HTMLIFrameElement>('iframe[src*="hcaptcha.com"]');
+    if (!iframe) return null;
+    const match = iframe.src.match(/[?&]sitekey=([^&]+)/);
+    return match ? match[1] : null;
+  });
+
+  if (!sitekey) throw new Error('Could not extract hCaptcha sitekey from iframe');
+  console.log(`hCaptcha sitekey: ${sitekey}`);
+
+  const result = await solver.hcaptcha({
+    pageurl: 'https://sepolia-faucet.pk910.de/',
+    sitekey,
+  });
+
+  await page.evaluate((token) => {
+    // hCaptcha response field
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[name="h-captcha-response"]'
+    );
+    if (textarea) {
+      textarea.style.display = 'block';
+      textarea.value = token;
+    }
+
+    // Also set the g-recaptcha-response field some sites duplicate
+    const gTextarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[name="g-recaptcha-response"]'
+    );
+    if (gTextarea) gTextarea.value = token;
+
+    // Fire hCaptcha callback if present
+    const w = window as any;
+    if (w.hcaptcha) {
+      try {
+        // hCaptcha stores callbacks in its internal state
+        const el = document.querySelector('[data-hcaptcha-widget-id]');
+        const widgetId = el?.getAttribute('data-hcaptcha-widget-id');
+        if (widgetId) {
+          w.hcaptcha.execute(widgetId);
+        }
+      } catch (e) {
+        console.error('hCaptcha callback failed:', e);
+      }
+    }
+
+    // Fallback: fire data-callback directly
+    const callbackEl = document.querySelector<HTMLElement>('[data-callback]');
+    const callbackName = callbackEl?.getAttribute('data-callback');
+    if (callbackName && typeof w[callbackName] === 'function') {
+      w[callbackName](token);
+    }
+  }, result.data);
+
+  console.log('hCaptcha token injected');
+}
+
 const MAX_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 test('test', async ({}, testInfo) => {
@@ -320,10 +452,10 @@ test('test', async ({}, testInfo) => {
   // start recording (don't await yet if you want parallel)
   const recorder = recordScreenshots(page, screenshotsDir, MAX_DURATION_MS, 5000);
 
-  // Abort and re-route captcha domains around the proxy
-  await page.route('**/*hcaptcha.com/**', route => route.continue());
-  await page.route('**/*recaptcha.net/**', route => route.continue());
-  await page.route('**/*gstatic.com/**', route => route.continue());
+  // Block reCaptcha (invisible, solve from Node)
+  await page.route('**/*google.com/recaptcha/**', route => route.abort());
+  await page.route('**/*recaptcha.net/**', route => route.abort());
+  await page.route('**/*gstatic.com/recaptcha/**', route => route.abort());
 
   try {
     await page.goto('https://sepolia-faucet.pk910.de/#/');
@@ -335,7 +467,7 @@ test('test', async ({}, testInfo) => {
     await page.waitForTimeout(pollIntervalMs);
 
     try {
-      await solveCaptchaViaAPI(page);
+      await solveCaptcha(page);
       console.log("Proceeding past CAPTCHA...");
       // continue with your automation here
     } catch (err) {
