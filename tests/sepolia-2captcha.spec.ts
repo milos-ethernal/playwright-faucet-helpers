@@ -292,7 +292,7 @@ async function solveCaptcha(page: Page): Promise<void> {
   if (type === 'recaptcha') {
     await solveRecaptchaV3(page);
   } else {
-    await solveHCaptcha(page);
+    await solveHCaptchaOnPage(page);
   }
 }
 
@@ -328,8 +328,7 @@ async function solveRecaptchaV3(page: Page): Promise<void> {
   console.log('reCaptcha v3 token injected');
 }
 
-async function solveHCaptcha(page: Page): Promise<void> {
-  // Extract sitekey from the rendered iframe URL
+async function solveHCaptchaOnPage(page: Page): Promise<void> {
   const sitekey = await page.evaluate(() => {
     const iframe = document.querySelector<HTMLIFrameElement>('iframe[src*="hcaptcha.com"]');
     if (!iframe) return null;
@@ -337,16 +336,12 @@ async function solveHCaptcha(page: Page): Promise<void> {
     return match ? match[1] : null;
   });
 
-  if (!sitekey) throw new Error('Could not extract hCaptcha sitekey from iframe');
+  if (!sitekey) throw new Error('Could not extract hCaptcha sitekey');
   console.log(`hCaptcha sitekey: ${sitekey}`);
 
-  const result = await solver.hcaptcha({
-    pageurl: 'https://sepolia-faucet.pk910.de/',
-    sitekey,
-  });
+  const token = await solveHCaptcha(sitekey); // ← direct REST call, no SDK
 
   await page.evaluate((token) => {
-    // hCaptcha response field
     const textarea = document.querySelector<HTMLTextAreaElement>(
       'textarea[name="h-captcha-response"]'
     );
@@ -354,37 +349,64 @@ async function solveHCaptcha(page: Page): Promise<void> {
       textarea.style.display = 'block';
       textarea.value = token;
     }
-
-    // Also set the g-recaptcha-response field some sites duplicate
     const gTextarea = document.querySelector<HTMLTextAreaElement>(
       'textarea[name="g-recaptcha-response"]'
     );
     if (gTextarea) gTextarea.value = token;
 
-    // Fire hCaptcha callback if present
-    const w = window as any;
-    if (w.hcaptcha) {
-      try {
-        // hCaptcha stores callbacks in its internal state
-        const el = document.querySelector('[data-hcaptcha-widget-id]');
-        const widgetId = el?.getAttribute('data-hcaptcha-widget-id');
-        if (widgetId) {
-          w.hcaptcha.execute(widgetId);
-        }
-      } catch (e) {
-        console.error('hCaptcha callback failed:', e);
-      }
-    }
-
-    // Fallback: fire data-callback directly
+    // Fire callback
     const callbackEl = document.querySelector<HTMLElement>('[data-callback]');
     const callbackName = callbackEl?.getAttribute('data-callback');
+    const w = window as any;
     if (callbackName && typeof w[callbackName] === 'function') {
       w[callbackName](token);
     }
-  }, result.data);
+  }, token);
 
   console.log('hCaptcha token injected');
+}
+
+async function solveHCaptcha(sitekey: string): Promise<string> {
+  const apiKey = process.env.TWOCAPTCHA_API_KEY!;
+  const pageUrl = 'https://sepolia-faucet.pk910.de/';
+
+  // Submit
+  const submitRes = await fetch(
+    `https://2captcha.com/in.php` +
+    `?key=${apiKey}` +
+    `&method=hcaptcha` +        // ← correct method name for the REST API
+    `&sitekey=${sitekey}` +
+    `&pageurl=${encodeURIComponent(pageUrl)}` +
+    `&json=1`
+  );
+  const submitData = await submitRes.json();
+  if (submitData.status !== 1) {
+    throw new Error(`2captcha submit failed: ${submitData.request}`);
+  }
+  const jobId = submitData.request;
+  console.log(`hCaptcha job submitted: ${jobId}`);
+
+  // Poll
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 5000));
+    const pollRes = await fetch(
+      `https://2captcha.com/res.php` +
+      `?key=${apiKey}` +
+      `&action=get` +
+      `&id=${jobId}` +
+      `&json=1`
+    );
+    const pollData = await pollRes.json();
+    if (pollData.status === 1) {
+      console.log('hCaptcha solved');
+      return pollData.request; // token
+    }
+    if (pollData.request !== 'CAPCHA_NOT_READY') {
+      throw new Error(`2captcha poll error: ${pollData.request}`);
+    }
+    console.log(`hCaptcha not ready yet (attempt ${i + 1}/24)...`);
+  }
+  throw new Error('2captcha hCaptcha timed out after 120s');
 }
 
 const MAX_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
@@ -421,15 +443,32 @@ test('test', async ({}, testInfo) => {
   );
   const page = await context.newPage();
 
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+
+  await page.addInitScript(() => {
+    (window as any).chrome = { runtime: {} };
+  });
+
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3], // just needs to be non-empty
+    });
+  });
+
   // Check if the proxy is working and not being blocked
   const response = await page.goto('http://ip-api.com/json/?fields=21155839');
   const ipInfo = await response?.json();
 
-  if (ipInfo.hosting || ipInfo.proxy) {
+  // Add this guard before using ipInfo
+  if (!ipInfo || ipInfo.status === 'fail') {
+    console.warn('IP check failed or was intercepted, skipping...');
+  } else if (ipInfo.hosting || ipInfo.proxy) {
     throw new Error(`Proxy IP ${ipInfo.query} is flagged (hosting=${ipInfo.hosting}, proxy=${ipInfo.proxy})`);
+  } else {
+    console.log(`Clean IP: ${ipInfo.query} — ${ipInfo.org}`);
   }
-
-  console.log(`Clean IP: ${ipInfo.query} — ${ipInfo.org}`);
 
   // Start keepalive immediately after page creation
   // const keepAlive = startKeepAlive(page, 20000); // ping every 20s
